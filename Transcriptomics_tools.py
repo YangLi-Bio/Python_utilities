@@ -11,6 +11,7 @@
 # 1. Scanpy_integrate : integrate multiple scRNA-Seq datasets
 # 2. Scanpy_preprocess : preprocess each scRNA-Seq dataset following the weblink : 
 #    https://scanpy-tutorials.readthedocs.io/en/latest/pbmc3k.html
+# 3. cal_growth_weight: calculate growth weights using Prescient
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
@@ -104,3 +105,54 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
   
   
   return adata_concat
+
+
+
+#################################################################################
+#                                                                               #
+#       3. cal_growth_weight: calculate growth weights using Prescient          #
+#                                                                               #
+#################################################################################
+
+
+def cal_growth_weight(expr_path, meta_path, time = "Time", out_path = "./"):
+  
+  # Modules
+  print("Importing modules ....")
+  import prescient.utils
+  import numpy as np
+  import pandas as pd
+  import sklearn
+  import umap
+  import scipy
+  import annoy
+  import torch
+  import matplotlib.pyplot as plt
+  
+  
+  
+  # Load data
+  print("Loading gene expression and meta matrices ...")
+  expr = pd.read_csv(expr_path, index_col = 0)
+  print("The first five lines of gene expression matrix: ")
+  expr.head()
+  
+  metadata = pd.read_csv(meta_path, index_col = 0)
+  print("The first five lines of meta matrix: ")
+  metadata.head()
+  
+  
+  # Scale normalized expression for PCA
+  scaler = sklearn.preprocessing.StandardScaler()
+  xs = pd.DataFrame(scaler.fit_transform(expr), index = expr.index, columns = expr.columns)
+  pca = sklearn.decomposition.PCA(n_components = 50)
+  xp_ = pca.fit_transform(xs)
+  
+  
+  # Computing growth using built-in PRESCIENT commands
+  g, g_l = prescient.utils.get_growth_weights(xs, xp_, metadata, tp_col = time, 
+                   genes = list(expr.columns), 
+                   birth_gst = out_path + "birth_msigdb_kegg.csv",
+                   death_gst = out_path + "death_msigdb_kegg.csv",
+                   outfile = out_path + "growth_kegg.pt"
+                  )
