@@ -115,7 +115,7 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
 #################################################################################
 
 
-def cal_growth_weight(expr_path, meta_path, time = "Time", out_path = "./"):
+def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", birth_file, death_file):
   
   # Modules
   print("Importing modules ....")
@@ -129,6 +129,13 @@ def cal_growth_weight(expr_path, meta_path, time = "Time", out_path = "./"):
   import torch
   import matplotlib.pyplot as plt
   
+  
+  # expr_path = 'normalized_expr.csv'
+  # meta_path = 'metadata.csv'
+  # time = "month"
+  # out_path = "./"
+  # birth_file = 'birth_msigdb_kegg.csv'
+  # death_file = 'death_msigdb_kegg.csv'
   
   
   # Load data
@@ -152,7 +159,7 @@ def cal_growth_weight(expr_path, meta_path, time = "Time", out_path = "./"):
   # Computing growth using built-in PRESCIENT commands
   g, g_l = prescient.utils.get_growth_weights(xs, xp_, metadata, tp_col = time, 
                    genes = list(expr.columns), 
-                   birth_gst = out_path + "birth_msigdb_kegg.csv",
-                   death_gst = out_path + "death_msigdb_kegg.csv",
+                   birth_gst = birth_file,
+                   death_gst = death_file,
                    outfile = out_path + "growth_kegg.pt"
                   )
