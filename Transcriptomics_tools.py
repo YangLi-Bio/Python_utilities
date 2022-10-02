@@ -12,6 +12,8 @@
 # 2. Scanpy_preprocess : preprocess each scRNA-Seq dataset following the weblink : 
 #    https://scanpy-tutorials.readthedocs.io/en/latest/pbmc3k.html
 # 3. cal_growth_weight: calculate growth weights using Prescient
+# 4. run_cellrank_time : run CellRank on time-series scRNA-seq data
+# 5. vis_cellrank : visualization for cellrank
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
@@ -115,6 +117,18 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
 #################################################################################
 
 
+# Input : 
+# 1. expr_path : file path of the gene expression matrix
+# 2. meta_path : file path of the metadata
+# 3. time : column in the metada representing time labels
+# 4. out_path : file path to save outputs
+# 5. birth_file : file saving the pathways associated with cell cycle
+# 6. death_file : file saving the pathways relevant to cell apoptasis
+
+
+# Output : growth vector
+
+
 def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", birth_file, death_file):
   
   # Modules
@@ -163,3 +177,201 @@ def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", bir
                    death_gst = death_file,
                    outfile = out_path + "growth_kegg.pt"
                   )
+
+
+
+#################################################################################
+#                                                                               #
+#     4. run_cellrank_time : run CellRank on time-series scRNA-seq data         #
+#                                                                               #
+#################################################################################
+
+
+# Import modules used in run_cellrank_time
+def import_mod_cellrank():
+  
+  # Import modules
+  import sys
+  import matplotlib.pyplot as plt
+  import scvelo as scv
+  import scanpy as sc
+  import cellrank as cr
+
+
+  # import CellRank kernels and estimators
+  from cellrank.external.kernels import WOTKernel
+  from cellrank.tl.kernels import ConnectivityKernel
+  from cellrank.tl.estimators import GPCCA
+
+
+
+# Time series analyses (random walks, probability mass flow, macrostates, fate probabilities, 
+# log-odds in time, and driver genes)
+
+
+
+def run_cellrank_time(adata, dpi_save = 400, dpi = 80, 
+                      fontsize = 20, color_map = "viridis", 
+                      outDir = "./", time_label = "month", 
+                      time_start = 2.5,
+                      celltype_label = "Shane.cell.type", 
+                      organism = "mouse", cand_ter_states, 
+                      basis = "X_wnn.umap"):
+  
+  # Imporrt modules
+  import_mod_cellrank()
+  
+  
+  # set verbosity levels
+  cr.settings.verbosity = 2
+  scv.settings.verbosity = 3
+  
+  
+  # figure settings
+  scv.settings.set_figure_params(
+      "scvelo", dpi_save = dpi_save, dpi = dpi, transparent = True, 
+      fontsize = fontsize, color_map = color_map
+  )
+  
+  
+  # UMAP plot of time points
+  adata = adata.raw.to_adata() # set annData as the raw data
+  scv.pl.scatter(adata, basis = basis, c = time_label, legend_loc = "right", 
+      save = outDir + "UMAP_time.pdf")
+  # To-do: arrange the order of keys in legend
+  
+  
+  # UMAP visualization of cell types
+  scv.pl.scatter(adata, basis = basis, c = celltype_label, legend_loc = "right",
+      save = outDir + "UMAP_celltypes.pdf")
+      
+  # Pre-process the data
+  sc.pp.pca(adata)
+  sc.pp.neighbors(adata, random_state = 0)
+  
+  
+  # Estimate initial growth rates
+  wk = WOTKernel(adata, time_key = time_label)
+  wk.compute_initial_growth_rates(organism = organism, key_added = "growth_rate_init")
+  scv.pl.scatter(
+      adata, c = "growth_rate_init", legend_loc = "right", basis = basis, s = 10, 
+      save = outDir + "growth_rate_init.pdf"
+  )
+  
+  
+  # Compute transition matrix
+  wk.compute_transition_matrix(
+    growth_iters = 3, growth_rate_key = "growth_rate_init", last_time_point = "connectivities"
+  )
+    
+  
+  return adata, wk
+
+
+#################################################################################
+#                                                                               #
+#                     5. vis_cellrank : visualization for cellrank              #
+#                                                                               #
+#################################################################################
+
+
+def vis_cellrank(adata, wk, ax, g, time_label = "Time", time_start, basis = "X_wnn.umap",
+                genes_oi, n_sims = 300, max_i = 200, dpi = 80, outDir = "./", 
+                cand_ter_states):
+  
+  # Simulate random walks
+  wk.plot_random_walks(
+    n_sims = n_sims,
+    max_iter = max_iter,
+    start_ixs = {time_label: time_start},
+    basis = basis,
+    c = time_label,
+    legend_loc = "right",
+    linealpha = 0.5,
+    dpi = dpi * 2,
+  )
+  # To-do: save this figure
+  
+  scv.pl.scatter(adata, c = celltype_label, basis = basis, legend_loc = "right", 
+                save = outDir + "UMAP_celltypes.pdf")
+  
+  
+  # Probability mass flow in time
+  ax = wk.plot_single_flow(
+    cluster_key = celltype_label,
+    time_key = time_label,
+    cluster = "MEF/other",
+    min_flow = 0.1,
+    xticks_step_size = 4,
+    show = False,
+    dpi = dpi,
+    clusters = ["MEF/other", "MET", "Stromal"]
+  )
+
+
+  # prettify the plot a bit, rotate x-axis tick labels
+  locs, labels = plt.xticks()
+  ax.set_xticks(locs)
+  ax.set_xticklabels(labels, rotation = 90)
+  plt.save(outDir + "Mass_flow_time.pdf")
+  
+  
+  # Compute macrostates
+  ck = ConnectivityKernel(adata)
+  ck.compute_transition_matrix()
+  combined_kernel = 0.9 * wk + 0.1 * ck
+  g = GPCCA(combined_kernel)
+  g.compute_schur()
+  g.plot_spectrum(real_only = True)
+  # To-do: save the figure
+  
+  g.compute_macrostates(n_states = 6, cluster_key = celltype_label)
+  g.plot_macrostates(discrete = True, basis = basis, legend_loc = "right")
+  # To-do: save the figure
+
+  
+  # Define terminal macrostates
+  g.plot_macrostate_composition(key = time_label)
+  # To-do: save the figure
+  
+  g.set_terminal_states_from_macrostates(cand_ter_states)
+  
+  
+  # Compute fate probabilities
+  g.compute_absorption_probabilities(solver = "gmres", use_petsc = True)
+  cr.pl.circular_projection(adata, keys = [celltype_label, time_label], 
+                            legend_loc = "right", title = "")
+  # To-do: save the figure
+  
+  
+  # Log-odds in time
+  cr.pl.log_odds(
+    adata,
+    lineage_1 = "IPS",
+    lineage_2 = None,
+    time_key = time_label,
+    keys = ["Obox6"],
+    threshold = 0,
+    size = 2,
+    xticks_step_size = 4,
+    figsize = (9, 4)
+  )
+  cr.pl.log_odds(
+    adata,
+    lineage_1 = "IPS",
+    lineage_2 = None,
+    time_key = time_label,
+    keys = [celltype_label],
+    threshold = 0,
+    size = 2,
+    xticks_step_size = 4,
+    figsize = (9, 4),
+    legend_loc = "upper right out"
+  )
+  
+  
+  # Driver genes
+  g.compute_lineage_drivers(return_drivers = False)
+  
+  
+  return adata, wk, ax, g
