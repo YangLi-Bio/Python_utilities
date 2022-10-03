@@ -187,8 +187,27 @@ def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", bir
 #################################################################################
 
 
-# Import modules used in run_cellrank_time
-def import_mod_cellrank():
+# Inlput : 
+# 1. adata : annData
+# 2. dpi_save : dpi to save images
+# 3. dpi : dpi dpi to showcase images
+# 4. fontsize : font size in figures
+# 5. color_map : coloring scheme
+# 6. outDir : directory to save images
+# 7. time_label : metadata column to represent time points
+# 8. time_start : the start time point
+# 9. celltype_label : 
+
+
+def run_cellrank_time(adata, dpi_save = 400, dpi = 80, 
+                      fontsize = 10, color_map = "viridis", 
+                      outDir = "./", time_label = "month", 
+                      time_palette = ['#FFDE00', '#571179', '#29af7f'], 
+                      celltype_palette,
+                      time_start = 2.5, figsize = (7, 5),
+                      celltype_label = "Shane.cell.type", 
+                      organism = "mouse", 
+                      basis = "X_wnn.umap"):
   
   # Import modules
   import sys
@@ -202,24 +221,6 @@ def import_mod_cellrank():
   from cellrank.external.kernels import WOTKernel
   from cellrank.tl.kernels import ConnectivityKernel
   from cellrank.tl.estimators import GPCCA
-
-
-
-# Time series analyses (random walks, probability mass flow, macrostates, fate probabilities, 
-# log-odds in time, and driver genes)
-
-
-
-def run_cellrank_time(adata, dpi_save = 400, dpi = 80, 
-                      fontsize = 20, color_map = "viridis", 
-                      outDir = "./", time_label = "month", 
-                      time_start = 2.5,
-                      celltype_label = "Shane.cell.type", 
-                      organism = "mouse", cand_ter_states, 
-                      basis = "X_wnn.umap"):
-  
-  # Imporrt modules
-  import_mod_cellrank()
   
   
   # set verbosity levels
@@ -237,12 +238,15 @@ def run_cellrank_time(adata, dpi_save = 400, dpi = 80,
   # UMAP plot of time points
   adata = adata.raw.to_adata() # set annData as the raw data
   scv.pl.scatter(adata, basis = basis, c = time_label, legend_loc = "right", 
+      palette = time_palette, title = '', legend_fontsize = fontsize,
+      figsize = figsize,
       save = outDir + "UMAP_time.pdf")
   # To-do: arrange the order of keys in legend
   
   
   # UMAP visualization of cell types
-  scv.pl.scatter(adata, basis = basis, c = celltype_label, legend_loc = "right",
+  scv.pl.scatter(adata, basis = basis, c = celltype_label, legend_loc = "on data",
+      title = '', legend_fontsize = fontsize, figsize = figsize,
       save = outDir + "UMAP_celltypes.pdf")
       
   # Pre-process the data
@@ -275,7 +279,8 @@ def run_cellrank_time(adata, dpi_save = 400, dpi = 80,
 #################################################################################
 
 
-def vis_cellrank(adata, wk, ax, g, time_label = "Time", time_start, basis = "X_wnn.umap",
+# To-do : add RNA velocity
+def vis_cellrank(adata, wk, time_label = "Time", time_start, basis = "X_wnn.umap",
                 genes_oi, n_sims = 300, max_i = 200, dpi = 80, outDir = "./", 
                 cand_ter_states):
   
