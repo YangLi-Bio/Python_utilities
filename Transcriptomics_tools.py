@@ -14,6 +14,9 @@
 # 3. cal_growth_weight: calculate growth weights using Prescient
 # 4. run_cellrank_time : run CellRank on time-series scRNA-seq data
 # 5. vis_cellrank : visualization for cellrank
+# 6. cellrank_pseudotime : run cellrank in a pseudotime scenario
+# 7. scanpy_export_CB : export scRNA-seq dataset to Cell Browser
+# 8. scanpy_annotate : annotate cell clusters
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
@@ -100,7 +103,6 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
   # Use BBKNN to integrate the two datasets
   sc.tl.pca(adata_concat)
   
-  %%time
   sc.external.pp.bbknn(adata_concat, batch_key='batch')  # running bbknn 1.3.6
   
   sc.pl.umap(adata_concat, color=['batch', ref_label])
@@ -108,6 +110,138 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
   
   return adata_concat
 
+
+
+#################################################################################
+#                                                                               #
+# 2. Scanpy_preprocess_clustering : preprocess each scRNA-Seq dataset following #
+#    the weblink : https://scanpy-tutorials.readthedocs.io/en/latest/pbmc3k.htm #                                                                               #
+#                                                                               #
+#################################################################################
+
+
+# Input :
+# 1. adata : annData
+# 2. dir : directory to save images or orther results
+# 3. n_top : the number of top-ranked highly expressed genes, 20 by default
+
+
+def Scanpy_preprocess_clustering(adata, key_genes, outDir = "./", n_top = 20, min_genes = 200, 
+                                 min_cells = 3, n_genes_by_counts = 2500, n_genes = 25,
+                                 pct_counts_mt = 5, deg_method = "t-test"):
+  
+  # Modules and setting
+  import numpy as np
+  import pandas as pd
+  import scanpy as sc
+  
+  sc.settings.verbosity = 3 # verbosity: errors (0), warnings (1), info (2), hints (3)
+  sc.logging.print_header()
+  sc.settings.set_figure_params(dpi = 80, facecolor = 'white')
+  adata.var_names_make_unique() # this is unnecessary if using `var_names='gene_ids'` 
+  # in `sc.read_10x_mtx`
+  
+  
+  # Data description
+  print ("Basic information of the annData: ")
+  adata
+  
+  
+  # Preprocessing
+  print ("highest fraction of counts in each single cell, across all cells, showing the " + 
+          n_top + " genes:")
+  sc.pl.highest_expr_genes(adata, n_top = n_top, save = outDir + "highest_expr_genes.png")
+  
+  
+  # Basic filtering
+  print ("Filtering genes expressed in " + min_cells + " cells and filtering cells where at least " + 
+          min_genes + " are expressed:")
+  sc.pp.filter_cells(adata, min_genes = min_genes)
+  sc.pp.filter_genes(adata, min_cells = min_cells)
+  print ("Adding MT-genes as annotations ...")
+  adata.var['mt'] = adata.var_names.str.startswith('MT-')  
+  # annotate the group of mitochondrial genes as 'mt'
+  
+  sc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
+  print ("Violin plots for quality control: ")
+  sc.pl.violin(adata, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'],
+             jitter = 0.4, multi_panel = True, save = outDir + "violin_plots.png")
+             sc.pl.scatter(adata, x='total_counts', y='pct_counts_mt')
+  print ("Violin plots for quality control: ")
+  sc.pl.scatter(adata, x = 'total_counts', y = 'n_genes_by_counts', 
+                save = outDir + "scatter_plots.png")
+  print ("slicing the AnnData object by retaining cells with at least " + 
+          n_genes_by_counts + " genes and at most " + pct_counts_mt + " MT genes ...")
+  adata = adata[adata.obs.n_genes_by_counts < n_genes_by_counts, :]
+  adata = adata[adata.obs.pct_counts_mt < pct_counts_mt, :]
+  print ("Normalizing the data matrix to 1e4 reads per cell ...")
+  sc.pp.normalize_total(adata, target_sum=1e4)
+  sc.pp.log1p(adata)
+  sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+  print ("Highly variable genes: ")
+  sc.pl.highly_variable_genes(adata, save = outDir + "highly_variable_genes.png")
+  adata.raw = adata
+  print ("Retaining the highly variable genes ...")
+  adata = adata[:, adata.var.highly_variable]
+  print ("Regressing out effects of total counts per cell and the percentage of MT-genes ...")
+  sc.pp.regress_out(adata, ['total_counts', 'pct_counts_mt'])
+  print ("Scaling each gene to unit variance. Clipping values exceeding standard deviation 10 ...")
+  sc.pp.scale(adata, max_value=10)
+  
+  
+  # Principal component analysis
+  print ("Reducing dimensions ...")
+  sc.tl.pca(adata, svd_solver='arpack')
+  print ("Making a scatter plot in the PCA coordinate: ")
+  sc.pl.pca(adata, color='CST3', save = outDir + "PCA_scatter_plot.png")
+  print ("PCA variance ratio: ")
+  sc.pl.pca_variance_ratio(adata, log=True, save = outDir + "variance_ratio.png")
+  
+  
+  # Computing the neighborhood graph
+  print ("Computing neighborhood graph ...")
+  sc.pp.neighbors(adata, n_neighbors=10, n_pcs=40)
+  
+  
+  # Embedding the neighborhood graph
+  print ("Embedding the neighborhood graph ...")
+  sc.tl.paga(adata)
+  sc.pl.paga(adata, plot=False) # remove `plot=False` if you want to see the coarse-grained graph
+  sc.tl.umap(adata, init_pos='paga', save = outDir + "UMAP.png")
+  print ("Raw count UMAP of genes: ")
+  sc.pl.umap(adata, color= key_genes, save = outDir + "UMAP_gene_rawCt.png")
+  print ("Scaled count UMAP of genes: ")
+  sc.pl.umap(adata, color= key_genes, use_raw = False, save = outDir + "UMAP_gene_scaledCt.png")
+
+
+  # Clustering the neighborhood graph
+  print ("Clustering the neighborhood graph ...")
+  sc.tl.leiden(adata)
+  sc.pl.umap(adata, color= "leiden", save = outDir + "cluster_UMAP.png")
+  
+  
+  # Finding marker genes
+  print ("Finding marker genes using " + method + " ...")
+  if deg_method == "t-test":
+    sc.tl.rank_genes_groups(adata, 'leiden', method='t-test')
+  else deg_method == "wilcoxon":
+    sc.settings.verbosity = 2  # reduce the verbosity
+    sc.tl.rank_genes_groups(adata, 'leiden', method= deg_method)
+  sc.pl.rank_genes_groups(adata, n_genes=n_genes, sharey=False, save = outDir + "markers.png")
+  print ("The top-5 top-ranked genes per cluster: ")
+  pd.DataFrame(adata.uns['rank_genes_groups']['names']).head(5)
+  
+  
+  # Get a table with the scores and groups
+  result = adata.uns['rank_genes_groups']
+  groups = result['names'].dtype.names
+  pd.DataFrame(
+      {group + '_' + key[:1]: result[key][group]
+      for group in groups for key in ['names', 'pvals', 'pvals_adj']}).head(5)
+  
+  
+  adata
+  
 
 
 #################################################################################
@@ -129,7 +263,7 @@ def Scanpy_integrate(adata_ref, adata, ref_label, label):
 # Output : growth vector
 
 
-def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", birth_file, death_file):
+def cal_growth_weight(expr_path, meta_path, birth_file, death_file, time = "month", out_path = "./"):
   
   # Modules
   print("Importing modules ....")
@@ -199,11 +333,11 @@ def cal_growth_weight(expr_path, meta_path, time = "month", out_path = "./", bir
 # 9. celltype_label : 
 
 
-def run_cellrank_time(adata, dpi_save = 400, dpi = 80, 
+def run_cellrank_time(adata, celltype_palette,
+                      dpi_save = 400, dpi = 80, 
                       fontsize = 10, color_map = "viridis", 
                       outDir = "./", time_label = "month", 
                       time_palette = ['#FFDE00', '#571179', '#29af7f'], 
-                      celltype_palette,
                       time_start = 2.5, figsize = (7, 5),
                       celltype_label = "Shane.cell.type", 
                       organism = "mouse", 
@@ -255,10 +389,13 @@ def run_cellrank_time(adata, dpi_save = 400, dpi = 80,
   
   
   # Estimate initial growth rates
+  # To-do : refer to materials regarding unbalanced optimal transport
+  adata.obs[time_label] = adata.obs[time_label].astype('float')
   wk = WOTKernel(adata, time_key = time_label)
   wk.compute_initial_growth_rates(organism = organism, key_added = "growth_rate_init")
   scv.pl.scatter(
       adata, c = "growth_rate_init", legend_loc = "right", basis = basis, s = 10, 
+      figsize = figsize, title = '', legend_fontsize = fontsize,
       save = outDir + "growth_rate_init.pdf"
   )
   
@@ -280,9 +417,10 @@ def run_cellrank_time(adata, dpi_save = 400, dpi = 80,
 
 
 # To-do : add RNA velocity
-def vis_cellrank(adata, wk, time_label = "Time", time_start, basis = "X_wnn.umap",
-                genes_oi, n_sims = 300, max_i = 200, dpi = 80, outDir = "./", 
-                cand_ter_states):
+def vis_cellrank(adata, wk, cand_ter_states, genes_oi, time_start, time_label = "Time", basis = "X_wnn.umap",
+                n_sims = 300, max_iter = 200, dpi = 80, outDir = "./", 
+                figsize = (7, 5), cluster_in = "OPC", clusters_out = ["Oligo", "AG", "MG"]
+                ):
   
   # Simulate random walks
   wk.plot_random_walks(
@@ -293,32 +431,36 @@ def vis_cellrank(adata, wk, time_label = "Time", time_start, basis = "X_wnn.umap
     c = time_label,
     legend_loc = "right",
     linealpha = 0.5,
-    dpi = dpi * 2,
+    dpi = dpi * 2, figsize = figsize,
+    save = outDir + "cellrank_random_walk.pdf"
   )
-  # To-do: save this figure
+
   
-  scv.pl.scatter(adata, c = celltype_label, basis = basis, legend_loc = "right", 
-                save = outDir + "UMAP_celltypes.pdf")
+  # UMAP plot of cell types
+  scv.pl.scatter(adata, basis = basis, c = celltype_label, legend_loc = "on data",
+      title = '', legend_fontsize = fontsize, figsize = figsize,
+      save = outDir + "UMAP_celltypes.pdf")
   
   
   # Probability mass flow in time
   ax = wk.plot_single_flow(
     cluster_key = celltype_label,
     time_key = time_label,
-    cluster = "MEF/other",
+    cluster = cluster_in,
     min_flow = 0.1,
     xticks_step_size = 4,
     show = False,
     dpi = dpi,
-    clusters = ["MEF/other", "MET", "Stromal"]
+    clusters = clusters_out
   )
+  # To-do: only one cell type, maybe because of too few cell types.
 
 
   # prettify the plot a bit, rotate x-axis tick labels
   locs, labels = plt.xticks()
   ax.set_xticks(locs)
   ax.set_xticklabels(labels, rotation = 90)
-  plt.save(outDir + "Mass_flow_time.pdf")
+  plt.savefig(outDir + "Mass_flow_time.pdf")
   
   
   # Compute macrostates
@@ -380,3 +522,191 @@ def vis_cellrank(adata, wk, time_label = "Time", time_start, basis = "X_wnn.umap
   
   
   return adata, wk, ax, g
+
+
+
+#################################################################################
+#                                                                               #
+#         6. cellrank_pseudotime : run cellrank in a pseudotime scenario        #
+#                                                                               #
+#################################################################################
+
+
+# Input : 
+# 1. adata : annData
+# 2. cluster_key : used to get PAGA graph
+
+
+def cellrank_pseudotime(adata, path = "./", prefix = "tmp", 
+                        cluster_key = "clusters", weight_connectivities=0.2, 
+                        n_genes = 5):
+  
+  # Import modules
+  print ("Importing modules ...\n")
+  import sys
+  import scvelo as scv
+  import scanpy as sc
+  import cellrank as cr
+  import numpy as np
+  scv.settings.verbosity = 3
+  scv.settings.set_figure_params("scvelo")
+  cr.settings.verbosity = 2
+  
+  
+  # Data description
+  print("Loading annData object: \n")
+  print(adata)
+  
+  
+  import warnings
+  warnings.simplefilter("ignore", category=UserWarning)
+  warnings.simplefilter("ignore", category=FutureWarning)
+  warnings.simplefilter("ignore", category=DeprecationWarning)
+  
+  
+  # Evaluate the data
+  print("Showing the fraction of spliced/unspliced reads ...")
+  scv.pl.proportions(adata, save = path + prefix + "_splicing_prop.png")
+  
+  
+  # Preprocess the data
+  print("Peprocessing the annData ...\n")
+  # print("Filtering out genes with less than 2000 spliced/unspliced counts ...\n")
+  # print("Normalizing and log-transforming the data restricted to 2000 highly variable genes ...\n")
+  scv.pp.filter_and_normalize(adata, min_shared_counts=20, n_top_genes=2000)
+  # print("Performing dimension reduction ...\n")
+  sc.tl.pca(adata)
+  # print("Selecting the top-30 neighbors based on 30 PCs ...\n")
+  sc.pp.neighbors(adata, n_pcs=30, n_neighbors=30)
+  scv.pp.moments(adata, n_pcs=None, n_neighbors=None)
+  
+  
+  # Run scVCelo
+  print ("Running scVCelo ...\n")
+  scv.tl.recover_dynamics(adata, n_jobs=8)
+  scv.tl.velocity(adata, mode="dynamical")
+  scv.tl.velocity_graph(adata)
+  scv.pl.velocity_embedding_stream(
+    adata, basis="umap", legend_fontsize=12, title="", smooth=0.8, min_mass=4, 
+    save = path + prefix + "_velocity.png"
+  )
+  
+  
+  # Identify terminal states
+  print ("Identifying the terminal state ...\n")
+  cr.tl.terminal_states(adata, cluster_key=cluster_key, weight_connectivities=weight_connectivities)
+  cr.pl.terminal_states(adata, save = path + prefix + "_terminal_states.png")
+  
+  
+  # Identify initial states
+  print ("Identifying the initial state ...\n")
+  cr.tl.initial_states(adata, cluster_key=cluster_key)
+  cr.pl.initial_states(adata, discrete=True, save = path + prefix + "_initial_states.png")
+  
+  
+  # Compute fate maps
+  cr.tl.lineages(adata)
+  cr.pl.lineages(adata, same_plot=False, save = path + prefix + "_lineages.png")
+  cr.pl.lineages(adata, same_plot=True, save = path + prefix + "_cell_fates.png")
+  
+  
+  # Directed PAGA
+  print ("Generating directed PAGA ...\n")
+  scv.tl.recover_latent_time(
+    adata, root_key="initial_states_probs", end_key="terminal_states_probs"
+  )
+  scv.tl.paga(
+    adata,
+    groups=cluster_key,
+    root_key="initial_states_probs",
+    end_key="terminal_states_probs",
+    use_time_prior="velocity_pseudotime",
+  )
+  cr.pl.cluster_fates(
+    adata,
+    mode="paga_pie",
+    cluster_key=cluster_key,
+    basis="umap",
+    legend_kwargs={"loc": "top right out"},
+    legend_loc="top left out",
+    node_size_scale=5,
+    edge_width_scale=1,
+    max_edge_width=4,
+    title="directed PAGA",
+    save = path + prefix + "_PAGA.png"
+  )
+  
+  
+  # Compute lineage drivers
+  print ("Computing lineage drivers ...\n")
+  cr.tl.lineage_drivers(adata)
+  cr.pl.lineage_drivers(adata, lineage="Alpha", n_genes=n_genes, 
+    save = path + prefix + "_drivers.png")
+  
+  
+  print ("Returning the annData ...\n")
+  return(adata)
+
+
+
+#################################################################################
+#                                                                               #
+#        7. scanpy_export_CB : export scRNA-seq dataset to Cell Browser         #
+#                                                                               #
+#################################################################################
+
+
+def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster', 
+                     markerField = 'rank_genes_groups'):
+  
+  # Import modules
+  print ("Importing modules ...\n")
+  import sys
+  import os
+  import numpy as np
+  import matplotlib
+  import matplotlib.pyplot as plt
+  import scanpy as sc
+  import pandas as pd
+  import re
+  import cellbrowser.cellbrowser as cb
+  from datetime import datetime
+  
+  
+  # Data description
+  print("Loading annData object: \n")
+  print(adata)
+  
+  
+  # Export data
+  cb.scanpyToCellbrowser(adata, cb_outdir, name, clusterField, markerField)
+
+
+
+#################################################################################
+#                                                                               #
+#                   8. scanpy_annotate : annotate cell clusters                 #
+#                                                                               #
+#################################################################################
+
+
+def scanpy_annotate(adata, new_cluster_names, marker_genes, clusterId = "leiden", outDir = "./"):
+  
+  # Data
+  print ("Basic information of the annData:")
+  adata
+  
+  
+  # Annotation
+  adata.rename_categories(clusterId, new_cluster_names)
+  print ("UMAP of cell types: ")
+  sc.pl.umap(adata, color= clusterId, legend_loc= 'on data', title='', frameon=False, 
+             save = outDir + "cell_types.png")
+  print ("Dotplot of marker genes across cell types: ")
+  sc.pl.dotplot(adata, marker_genes, groupby= clusterId, save = outDir + "dotplot_markers_celltypes.png")
+  print ("Violin plot of marker genes across cell types: ")
+  sc.pl.stacked_violin(adata, marker_genes, groupby= clusterId, 
+                       rotation=90, save = outDir + "vlnplot_markers_celltypes.png")
+  
+  
+  adata
