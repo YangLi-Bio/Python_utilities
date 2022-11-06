@@ -239,7 +239,7 @@ def Scanpy_preprocess_clustering(adata, key_genes, outDir = "./", n_top = 20, mi
       for group in groups for key in ['names', 'pvals', 'pvals_adj']}).head(5)
   
   
-  adata
+  return adata
   
 
 
@@ -310,6 +310,9 @@ def cal_growth_weight(expr_path, meta_path, birth_file, death_file, time = "mont
                    death_gst = death_file,
                    outfile = out_path + "growth_kegg.pt"
                   )
+  
+  
+  return g, g_l
 
 
 
@@ -644,7 +647,7 @@ def cellrank_pseudotime(adata, path = "./", prefix = "tmp",
   
   
   print ("Returning the annData ...\n")
-  return(adata)
+  return adata
 
 
 
@@ -708,7 +711,7 @@ def scanpy_annotate(adata, new_cluster_names, marker_genes, clusterId = "leiden"
                        rotation=90, save = outDir + "vlnplot_markers_celltypes.png")
   
   
-  adata
+  return adata
 
 
 
@@ -801,7 +804,7 @@ def scanpy_trajectory(adata, outDir = "./", denoising = False, key_genes = None,
     save = outDir + "paga_graph_keyGenes.png")
   
   
-  adata
+  return adata
 
 
 
@@ -875,4 +878,4 @@ def scanpy_pt(adata, root_ct, gene_names, paths):
   pl.show()
   
   
-  adata
+  return adata
