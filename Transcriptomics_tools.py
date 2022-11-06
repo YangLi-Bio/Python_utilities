@@ -1,9 +1,6 @@
 #################################################################################
 #                                                                               #
-# Functions to analyze transcriptomics data with the following characteristics: #
-# 1. Large scale                                                                #
-# 2. To be streamed with UCSC CellBrowser                                       #
-# 3. To be streamed with deeplearning models                                    #
+# Functions to analyze transcriptomics data with the following characteristics  #
 #                                                                               #
 #################################################################################
 
@@ -17,6 +14,8 @@
 # 6. cellrank_pseudotime : run cellrank in a pseudotime scenario
 # 7. scanpy_export_CB : export scRNA-seq dataset to Cell Browser
 # 8. scanpy_annotate : annotate cell clusters
+# 9. scanpy_trajectory : trajectory analysis using Scanpy
+# 10. scanpy_pt : pseudotime analysis using Scanpy
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
@@ -707,6 +706,173 @@ def scanpy_annotate(adata, new_cluster_names, marker_genes, clusterId = "leiden"
   print ("Violin plot of marker genes across cell types: ")
   sc.pl.stacked_violin(adata, marker_genes, groupby= clusterId, 
                        rotation=90, save = outDir + "vlnplot_markers_celltypes.png")
+  
+  
+  adata
+
+
+
+#################################################################################
+#                                                                               #
+#             9. scanpy_trajectory : trajectory analysis using Scanpy           #
+#                                                                               #
+#################################################################################
+
+
+# Input :
+# 1. denoising : whether denoising the data
+# 2. key_genes : key genes to showcase
+# 3. celltypes : cell type annotation labels
+
+
+def scanpy_trajectory(adata, outDir = "./", denoising = False, key_genes = None, 
+                      celltypes = None):
+  
+  # Import modules
+  import numpy as np
+  import pandas as pd
+  import matplotlib.pyplot as pl
+  from matplotlib import rcParams
+  import scanpy as sc
+  
+  sc.settings.verbosity = 3  # verbosity: errors (0), warnings (1), info (2), hints (3)
+  sc.logging.print_versions()
+  sc.settings.set_figure_params(dpi=80, frameon=False, figsize=(3, 3), 
+    facecolor='white')  # low dpi (dots per inch) yields small inline figures
+  
+  
+  # Data
+  adata.X = adata.X.astype('float64')  # this is not required and results will be comparable without it
+  print ("annData: ")
+  adata
+  
+  
+  # Preprocessing and Visualization
+  print ("Applying Zheng17 preprocessing pipeline ...")
+  sc.pp.recipe_zheng17(adata)
+  print ("Dimension reduction ...")
+  sc.tl.pca(adata, svd_solver='arpack')
+  print ("Finding neighbors and building graph ...")
+  sc.pp.neighbors(adata, n_neighbors=4, n_pcs=20)
+  sc.tl.draw_graph(adata)
+  print ("Showing graph using force-directed layout: ")
+  sc.pl.draw_graph(adata, color='paul15_clusters', legend_loc='on data', 
+    save = outDir + "fa_graph.png")
+  
+  
+  # Optional: Denoising the graph
+  if denoising == True:
+    sc.tl.diffmap(adata)
+    sc.pp.neighbors(adata, n_neighbors=10, use_rep='X_diffmap')
+    sc.tl.draw_graph(adata)
+    print ("Showing graph after denoising using force-directed layout: ")
+    sc.pl.draw_graph(adata, color='paul15_clusters', legend_loc='on data', 
+      save = outDir + "fa_denoised_graph.png")
+  
+  
+  # Clustering and PAGA
+  print ("Clustering using Louvain ...")
+  sc.tl.louvain(adata, resolution = 1.0)
+  sc.tl.paga(adata, groups='louvain')
+  print ("Showing PAGA graph of Louvain: ")
+  sc.pl.paga(adata, color = "louvain", save = outDir + "clusters_paga.png")
+  if key_genes != None:
+    print ("Showing PAGA graph of key genes: ")
+    sc.pl.paga(adata, color = key_genes, save = outDir + "keyGenes_paga.png")
+  print ("Showing cluster labels: ")
+  adata.obs['louvain'].cat.categories
+  adata.obs['louvain_anno'] = adata.obs['louvain']
+  print ("Annotating cell types ...")
+  adata.obs['louvain_anno'].cat.categories = celltypes
+  print ("Annotated cell types: ")
+  adata.obs['louvain_anno'].cat.categories
+  sc.tl.paga(adata, groups='louvain_anno')
+  print ("PAGA of annotated cell types: ")
+  sc.pl.paga(adata, threshold=0.03, show=False, save = outDir + "paga_celltyped.png")
+  
+  
+  # Recomputing the embedding using PAGA-initialization
+  sc.tl.draw_graph(adata, init_pos='paga')
+  print ("PAGA graph of cell types:")
+  sc.pl.draw_graph(adata, color= "louvain_anno", legend_loc='on data', 
+    save = outDir + "paga_graph_celltypes.png")
+  print ("PAGA graph of key genes: ")
+  sc.pl.draw_graph(adata, color= key_genes, legend_loc='on data', 
+    save = outDir + "paga_graph_keyGenes.png")
+  
+  
+  adata
+
+
+
+#################################################################################
+#                                                                               #
+#                 10. scanpy_pt : pseudotime analysis using Scanpy              #
+#                                                                               #
+#################################################################################
+
+
+# Input :
+# 1. root_ct : cell type as root
+# 2. gene_names : key genes to showcase
+# 3. paths : cell paths in trajectory to showcase in trajectory
+
+
+def scanpy_pt(adata, root_ct, gene_names, paths):
+  
+  # Import modules
+  import numpy as np
+  import pandas as pd
+  import matplotlib.pyplot as pl
+  from matplotlib import rcParams
+  import scanpy as sc
+  
+  sc.settings.verbosity = 3  # verbosity: errors (0), warnings (1), info (2), hints (3)
+  sc.logging.print_versions()
+  sc.settings.set_figure_params(dpi=80, frameon=False, figsize=(3, 3), 
+    facecolor='white')  # low dpi (dots per inch) yields small inline figures
+  
+  
+  # Data
+  print ("Basic information of annData: ")
+  adata
+  
+  
+  # Reconstructing gene changes along PAGA paths for a given set of genes
+  print ("Selecting cells belonging to " + root_ct + " as root ...")
+  adata.uns['iroot'] = np.flatnonzero(adata.obs['louvain_anno']  == root_ct)[0]
+  sc.tl.dpt(adata)
+  sc.pl.draw_graph(adata, color=['louvain_anno', 'dpt_pseudotime'], legend_loc='on data', 
+    save = outDir + "pseudotime.png")
+  adata.obs['distance'] = adata.obs['dpt_pseudotime']
+  adata.obs['clusters'] = adata.obs['louvain_anno']  # just a cosmetic change
+  adata.uns['clusters_colors'] = adata.uns['louvain_anno_colors']
+  
+  
+  # Generate eheatmap
+  print ("Generating heatmaps for three paths: ")
+  _, axs = pl.subplots(ncols=3, figsize=(6, 2.5), gridspec_kw={'wspace': 0.05, 'left': 0.12})
+  pl.subplots_adjust(left=0.05, right=0.98, top=0.82, bottom=0.2)
+  for ipath, (descr, path) in enumerate(paths):
+      _, data = sc.pl.paga_path(
+          adata, path, gene_names,
+          show_node_names=False,
+          ax=axs[ipath],
+          ytick_fontsize=12,
+          left_margin=0.15,
+          n_avg=50,
+          annotations=['distance'],
+          show_yticks=True if ipath==0 else False,
+          show_colorbar=False,
+          color_map='Greys',
+          groups_key='clusters',
+          color_maps_annotations={'distance': 'viridis'},
+          title='{} path'.format(descr),
+          return_data=True,
+          show=False)
+      data.to_csv(outDir + 'paga_path_{}.csv'.format(descr))
+  pl.savefig(outDir + 'heatmap.png')
+  pl.show()
   
   
   adata
