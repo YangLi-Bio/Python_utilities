@@ -16,6 +16,7 @@
 # 8. scanpy_annotate : annotate cell clusters
 # 9. scanpy_trajectory : trajectory analysis using Scanpy
 # 10. scanpy_pt : pseudotime analysis using Scanpy
+# 11. pyscenic_grn : infer gene regulatory networks using pySCENIC
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
@@ -879,3 +880,83 @@ def scanpy_pt(adata, root_ct, gene_names, paths):
   
   
   return adata
+
+
+
+#################################################################################
+#                                                                               #
+#       11. pyscenic_grn : infer gene regulatory networks using pySCENIC        #
+#                                                                               #
+#################################################################################
+
+
+def pyscenic_grn(DATA_FOLDER, RESOURCES_FOLDER, DATABASE_FOLDER, SCHEDULER, 
+        DATABASES_GLOB, MOTIF_ANNOTATIONS_FNAME, MM_TFS_FNAME, SC_EXP_FNAME, 
+        REGULONS_FNAME, MOTIFS_FNAME):
+    
+    # Import modules
+    import os
+    import glob # The glob module finds all the pathnames matching a specified pattern 
+    # according to the rules used by the Unix shell
+    
+    import pickle # the process of converting a Python object into a byte stream to store it in a file/database
+    import pandas as pd # Python Data Analysis Library
+    import numpy as np # NumPy is a library for the Python programming language
+    
+    from dask.diagnostics import ProgressBar # An interactive dashboard containing 
+    # many plots and tables with live information
+    
+    from arboreto.utils import load_tf_names
+    from arboreto.algo import grnboost2
+    
+    from ctxcore.rnkdb import FeatherRankingDatabase as RankingDatabase
+    from pyscenic.utils import modules_from_adjacencies, load_motifs
+    from pyscenic.prune import prune2df, df2regulons
+    from pyscenic.aucell import aucell
+    
+    import seaborn as sns # Seaborn is a library that uses Matplotlib underneath to plot graphs
+    
+    
+    # Load expression matrix and databases
+    print ('Loading expression matrix and databases ...')
+    ex_matrix = pd.read_csv(SC_EXP_FNAME, sep='\t', header=0, index_col=0).T
+    print ('Size of the expression matrix: ')
+    ex_matrix.shape
+    print ('Loading TF names ...')
+    tf_names = load_tf_names(MM_TFS_FNAME)
+    print ('Loading TF databases ...')
+    db_fnames = glob.glob(DATABASES_GLOB)
+    def name(fname):
+        return os.path.splitext(os.path.basename(fname))[0]
+    dbs = [RankingDatabase(fname=fname, name=name(fname)) for fname in db_fnames]
+    dbs
+    
+    
+    # Build GRN and regulons
+    print ('Building adjacency matrix ...')
+    adjacencies = grnboost2(ex_matrix, tf_names=tf_names, verbose=True)
+    print ('Predicting co-expression modules ...')
+    modules = list(modules_from_adjacencies(adjacencies, ex_matrix))
+    
+    
+    # Calculate a list of enriched motifs and the corresponding target genes for all modules.
+    print ('Adding TFs to gene co-expression modules ...')
+    with ProgressBar():
+        df = prune2df(dbs, modules, MOTIF_ANNOTATIONS_FNAME)
+    
+    # Create regulons from this table of enriched motifs.
+    regulons = df2regulons(df)
+    
+    # Save the enriched motifs and the discovered regulons to disk.
+    df.to_csv(MOTIFS_FNAME)
+    with open(REGULONS_FNAME, "wb") as f:
+        pickle.dump(regulons, f)
+    
+    # The clusters can be leveraged via the dask framework:
+    df = prune2df(dbs, modules, MOTIF_ANNOTATIONS_FNAME, client_or_address=SCHEDULER)
+    
+    
+    #  Enrichment of a regulon is measured as the Area Under the recovery Curve (AUC)
+    print ('Measuring the enrichment of regulons via Area Under the recovery Curve (AUC) ...')
+    auc_mtx = aucell(ex_matrix, regulons, num_workers=4)
+    sns.clustermap(auc_mtx, figsize=(8,8))

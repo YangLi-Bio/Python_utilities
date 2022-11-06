@@ -11,7 +11,7 @@ script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
 
 
 # Functions
-# 1. vipcca_integrate_rna_atac : integrate RNA+ATAC using VIPCCA
+# 1. vipcca_integrate_rna_atac : integrate RNA + ATAC using VIPCCA
 # 2. glue_preprocess : GLUE processing for single-cell RNA + ATAC
 # 3. glue_training : training model using GLUE
 # 4. glue_reg_infer : gene regulatory inference using GLUE
