@@ -15,6 +15,8 @@ script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
 # 2. glue_preprocess : GLUE processing for single-cell RNA + ATAC
 # 3. glue_training : training model using GLUE
 # 4. glue_reg_infer : gene regulatory inference using GLUE
+# 5. multiVI_integrate_impute : integrate RNA + ATAC and impute missing modality
+# 6. muon_tri_integrate : integrate RNA + ATAC + protein from TEA-seq using muon
 
 
 
@@ -377,3 +379,426 @@ def glue_reg_infer(rna, atac, gtf_file, guidance_hvf, key_gene, outDir = "./"):
   
   
   return gene2peak
+
+
+
+#################################################################################
+#                                                                               #
+#       5. multiVI_integrate_impute : integrate RNA + ATAC and impute missing   #
+#          modality                                                             #
+#                                                                               #
+#################################################################################
+
+
+def multiVI_integrate_impute(adata_rna, atac_atac, atac_paired, genesToImpute, outDir = './'):
+    
+    # Modules
+    import scvi
+    import numpy as np
+    import scanpy as sc
+    
+    scvi.settings.seed = 420
+    
+    %config InlineBackend.print_figure_kwargs={'facecolor' : "w"}
+    %config InlineBackend.figure_format='retina'
+    
+    
+    # Data
+    print ('RNA modality: ')
+    adata_rna
+    print ('ATAC modality: ')
+    adata_atac
+    print ('Paired modality: ')
+    adata_paired
+    
+    
+    # We can now use the organizing method from scvi to concatenate these anndata
+    print ('Concatenating the modalities ...')
+    adata_mvi = scvi.data.organize_multiome_anndatas(adata_paired, adata_rna, adata_atac)
+    adata_mvi.obs
+    
+    
+    # Sort features
+    print ('Sorting the features so that genes occur before peaks ....')
+    adata_mvi = adata_mvi[:, adata_mvi.var["modality"].argsort()].copy()
+    adata_mvi.var
+    
+    
+    # Filter features to remove those that appear in fewer than 1% of the cells
+    print ('Data size before filtering: ')
+    print(adata_mvi.shape)
+    sc.pp.filter_genes(adata_mvi, min_cells=int(adata_mvi.shape[0] * 0.01))
+    print ('Data size after filtering: ')
+    print(adata_mvi.shape)
+    
+    
+    # Setup and Training MultiVI
+    print ('Setting up the annData ...')
+    scvi.model.MULTIVI.setup_anndata(adata_mvi, batch_key='modality')
+    mvi = scvi.model.MULTIVI(
+        adata_mvi,
+        n_genes=(adata_mvi.var['modality']=='Gene Expression').sum(),
+        n_regions=(adata_mvi.var['modality']=='Peaks').sum(),
+    )
+    mvi.view_anndata_setup()
+    mvi.train()
+    
+    
+    # Save and Load MultiVI models
+    print ('Saving the model to ' + outDir + 'trained_multivi')
+    mvi.save(outDir + "trained_multivi")
+    # mvi = scvi.model.MULTIVI.load("trained_multivi", adata=adata_mvi)
+    
+    
+    # Extracting and visualizing the latent space
+    print ('Visualizing the latent space ...')
+    adata_mvi.obsm["MultiVI_latent"] = mvi.get_latent_representation()
+    sc.pp.neighbors(adata_mvi, use_rep="MultiVI_latent")
+    sc.tl.umap(adata_mvi, min_dist=0.2)
+    sc.pl.umap(adata_mvi, color='modality', save = outDir + 'latent_space.png')
+    
+    
+    # Impute missing modalities
+    print ('Imputing missing modalities for ' + len(genesToImpute) + ' genes ...')
+    imputed_expression = mvi.get_normalized_expression()
+    for gene in genesToImpute:
+        print ('Imputing gene ' + gene + " ...")
+        gene_idx = np.where(adata_mvi.var.index == gene)[0]
+        adata_mvi.obs[gene + '_imputed'] = imputed_expression.iloc[:, gene_idx]
+        sc.pl.umap(adata_mvi, color= gene + '_imputed', save = outDir + gene + '_imputed_umap.png')
+    
+    
+    return adata_mvi, imputed_expression
+
+
+
+#################################################################################
+#                                                                               #
+# 6. muon_tri_integrate : integrate RNA + ATAC + protein from TEA-seq using     #
+#    muon                                                                       #
+#                                                                               #
+#################################################################################
+
+
+# Process protein expression
+def muon_process_protein(mdata, celltype1, celltype2, outDir = './'):
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    # Protein modality (epitopes)
+    print ("Protein modality processing for protein ...")
+    prot = mdata["prot"]
+    print ('Preserving original counts in a layer before the normalisation for protein ...')
+    prot.layers['counts'] = prot.X
+    print ('Specifying features corresponding to the isotype controls for protein ...')
+    isotypes = prot.var_names.values[["Isotype" in v for v in prot.var_names]]
+    print(isotypes)
+    print ('Normalizing counts for protein ...')
+    pt.pp.dsb(mdata, prot_raw, isotype_controls=isotypes, random_state=1)
+    print ('Plotting values to visualise the effect of normalisation for protein ...')
+    sc.pl.scatter(mdata['prot'], x="prot:" + celltype1, y="prot:" + celltype2, layers='counts', 
+            save = outDir + 'scatter_prot_' + celltype1 + '_' + celltype2 + '_raw.png')
+    sc.pl.scatter(mdata['prot'], x="prot:" + celltype1, y="prot:" + celltype2, 
+            save = outDir + 'scatter_prot_' + celltype1 + '_' + celltype2 + '_normalized.png')
+    
+    
+    # Downstream analysis
+    print ('Downstream analysis for protein ...')
+    sc.tl.pca(prot)
+    sc.pl.pca(prot, color=['prot:' + celltype1, 'prot:' + celltype2], 
+            save = outDir + 'pca_prot_' + celltype1 + '_' + celltype2 + '.png')
+    sc.pp.neighbors(prot)
+    sc.tl.umap(prot, random_state=1)
+    sc.pl.umap(prot, color=['prot:' + celltype1, 'prot:' + celltype2], 
+            save = outDir + 'umap_prot_' + celltype1 + '_' + celltype2 + '.png')
+    
+    
+    return prot
+    
+
+
+# Quality control of RNA
+def muon_quality_ctr_rna(mdata, outDir = './'):
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    print ("Protein modality processing for RNA ...")
+    rna = mdata.mod['rna']
+    rna
+    print ('Quality control for RNA ...')
+    rna.var['mt'] = rna.var_names.str.startswith('MT-')  # annotate the group of mitochondrial genes as 'mt'
+    sc.pp.calculate_qc_metrics(rna, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
+    mu.pl.histogram(rna, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'], 
+            save = outDir + 'qc_rna.png')
+    
+    
+    return rna
+
+
+
+# Process RNA expression
+def muon_process_rna(mdata, genes, qc_ar = [200, 2500, 500, 5000, 30], outDir = './'):
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    # QC
+    mu.pp.filter_var(rna, 'n_cells_by_counts', lambda x: x >= 10)  # gene detected at least in 10 cells
+    mu.pp.filter_obs(rna, 'n_genes_by_counts', lambda x: (x >= qc_ar[0]) & (x < qc_ar[1]))
+    mu.pp.filter_obs(rna, 'total_counts', lambda x: (x > qc_ar[2]) & (x < qc_ar[3]))
+    mu.pp.filter_obs(rna, 'pct_counts_mt', lambda x: x < qc_ar[4])
+    mu.pl.histogram(rna, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'], 
+        save = outDir + 'qc_rna_after.png')
+    
+    
+    # Normalisation
+    print ('Normalizing RNA counts ...')
+    sc.pp.normalize_total(rna, target_sum=1e4)
+    sc.pp.log1p(rna)
+    
+    
+    # Feature selection
+    print ('Feature selection ...')
+    sc.pp.highly_variable_genes(rna, min_mean=0.02, max_mean=4, min_disp=0.5)
+    sc.pl.highly_variable_genes(rna, save = outDir + 'rna_highly_variable_genes.png')
+    
+    
+    # Scaling
+    print ('Scaling the RNA counts ...')
+    rna.layers["lognorm"] = rna.X.copy()
+    sc.pp.scale(rna, max_value=10)
+    
+    
+    # Downstream analysis
+    print ('Downstream analysis ...')
+    sc.tl.pca(rna, svd_solver='arpack')
+    sc.pl.pca(rna, color= genes, layer="lognorm", save = outDir + 'rna_pca_genes.png')
+    sc.pl.pca_variance_ratio(rna, log=True, save = outDir + 'rna_pca_var.png')
+    sc.pp.neighbors(rna, n_neighbors=10, n_pcs=20)
+    sc.tl.leiden(rna, resolution=.75)
+    sc.tl.umap(rna, spread=1., min_dist=.5, random_state=11)
+    sc.pl.umap(rna, color="leiden", legend_loc="on data", save = outDir + 'umap_rna_clusters.png')
+    
+    
+    return rna
+
+
+
+# Process ATAC data
+def muon_process_atac(mdata, genes, frag_file, meta_file, qc_ar = [200, 2500, 500, 5000, 30], outDir = './'):
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    # Load data
+    atac = mdata['atac']
+    atac
+    print ('Loading ATAC fragments ...')
+    ac.tl.locate_fragments(atac, frag_file)
+    print ('Adding metadata ...')
+    metadata = pd.read_csv(meta_file)
+    pd.set_option('display.max_columns', 500)
+    metadata.head()
+    atac.obs = atac.obs.join(metadata.set_index("original_barcodes"))
+    
+    
+    # Quality control
+    print ('Quality control for ATAC ...')
+    sc.pp.calculate_qc_metrics(atac, percent_top=None, log1p=False, inplace=True)
+    mu.pl.histogram(atac, ['total_counts', 'n_genes_by_counts'], save = outDir + 'atac_qc.png')
+    mu.pp.filter_var(atac, 'n_cells_by_counts', lambda x: x >= 5)  # a peak is detected in 5 cells or more
+    mu.pp.filter_obs(atac, 'total_counts', lambda x: (x >= qc_ar[0]) & (x <= qc_ar[1]))
+    mu.pp.filter_obs(atac, 'n_genes_by_counts', lambda x: (x >= qc_ar[2]) & (x <= qc_ar[3]))  # number of peaks per cell
+    mu.pl.histogram(atac, ['total_counts', 'n_genes_by_counts'], save = outDir + 'atac_qc_after.png')
+    ac.tl.nucleosome_signal(atac, n=1e6, barcodes="barcodes")
+    print ('Calculating chromosome signal ...')
+    mu.pl.histogram(atac, "nucleosome_signal", kde=False, save = outDir + 'nucleosome_signal.png')
+    print ('Calculating TSS enrichment ...')
+    tss = ac.tl.tss_enrichment(mdata, n_tss=1000, barcodes="barcodes")  # by default, 
+    # features=ac.tl.get_gene_annotation_from_rna(mdata)
+    
+    ac.pl.tss_enrichment(tss, save = outDir + 'atac_tss.png')
+    
+    # To avoid issues with nan being converted to 'nan' when the column is categorical,
+    # we explicitely convert it to str
+    mu.pp.filter_obs(atac, atac.obs.barcodes.astype(str) != 'nan')
+    
+    
+    # Normalisation
+    print ('Normalizing the ATAC data ...')
+    atac.layers["counts"] = atac.X
+    sc.pp.normalize_per_cell(atac, counts_per_cell_after=1e4)
+    sc.pp.log1p(atac)
+    
+    
+    # Feature selection
+    print ('Selecting features from ATAC ...')
+    sc.pp.highly_variable_genes(atac, min_mean=0.05, max_mean=1.5, min_disp=.5)
+    sc.pl.highly_variable_genes(atac, save = outDir + 'atac_highly_variable_features.png')
+    
+    
+    # Scaling
+    print ('Scaling the ATAC data ...')
+    atac.layers["lognorm"] = atac.X.copy()
+    
+    
+    # Downstream analysis
+    sc.pp.scale(atac)
+    sc.tl.pca(atac)
+    sc.pl.pca(atac, color=["n_genes_by_counts", "n_counts"], layer="lognorm", 
+            save = outDir + 'atac_pca.png')
+    sc.pp.neighbors(atac, n_neighbors=10, n_pcs=30)
+    sc.tl.leiden(atac, resolution=.5)
+    sc.tl.umap(atac, spread=1.5, min_dist=.5, random_state=30)
+    sc.pl.umap(atac, color=["leiden", "n_genes_by_counts"], legend_loc="on data", 
+            save = outDir + 'atac_umap_celltypes.png')
+    
+    
+    return atac
+
+
+
+# Multi-omics analyses
+def muon_tri_integrate(mdata, genes, outDir = "./"):
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    # Data
+    print ('Basic information of trimodality data: ')
+    mdata
+    mu.pp.intersect_obs(mdata)
+    
+    
+    # Multiplex clustering
+    print ('Perform multiplex clustering ...')
+    mdata.uns = dict()
+    mu.tl.leiden(mdata, resolution=[1., 1., 1.], random_state=1, key_added="leiden_multiplex")
+    mu.pl.embedding(mdata, basis="rna:X_umap", color=["prot:" + genes[0], "prot:" + genes[1], "leiden_multiplex", 
+                    "rna:leiden", "atac:leiden"], 
+            save = outDir + 'umap_multimodal_clusters.png')
+    
+    
+    # Multi-omics factor analysis
+    print ('Performing multi-omics factor analysis ...')
+    prot.var["highly_variable"] = True
+    mdata.update()
+    mu.tl.mofa(mdata, outfile= outDir + "models/pbmc_w3_teaseq.hdf5")
+    mu.pl.mofa(mdata, color=['prot:' + genes[0], 'prot:' + genes[1]], save = outDir + 'prot_mofa.png')
+    sc.pp.neighbors(mdata, use_rep="X_mofa", key_added='mofa')
+    sc.tl.umap(mdata, min_dist=.2, random_state=1, neighbors_key='mofa', save = outDir + 'mofa_embeddings.png')
+    
+    
+    # Interpreting the model
+    print ('Interpreting the MOFA+ model ...')
+    mu.pl.mofa_loadings(mdata, save = outDir + 'top_features_mofa.png')
+    
+    
+    # Weighted nearest neighbours
+    print ('Conducting weighted nearest neighbours ...')
+    for m in mdata.mod.keys():
+        sc.pp.neighbors(mdata[m])
+    mu.pp.neighbors(mdata, key_added='wnn')
+    sc.tl.leiden(mdata, resolution=.55, neighbors_key='wnn', key_added='leiden_wnn')
+    mu.tl.umap(mdata, random_state=10, neighbors_key='wnn')
+    mu.pl.umap(mdata, color="leiden_wnn", save = outDir + 'wnn_umap_leiden.png')
+    
+    
+    return mdata
+
+
+
+# Annotate cell types using muon
+def muon_annot_celltypes(mdata, genes, new_cluster_names):
+    
+    # Variables
+    # 1. genes : marker genes of various cell types
+    # 2. new_cluster_names : dictory of assignment from cell clusters to cell types
+    
+    
+    # Modules
+    import os
+    import numpy as np
+    import pandas as pd
+    import scanpy as sc
+    import muon as mu
+    import muon.atac as ac
+    import muon.prot as pt
+    import matplotlib
+    from matplotlib import pyplot as plt
+    plt.rcParams['figure.dpi'] = 100
+    
+    
+    # Feature plots
+    print ('Generating feature plots of marker genes ...')
+    mu.pl.embedding(mdata, basis="X_wnn_umap", color=list(map(
+        lambda x: "prot:" + x, genes
+    )), save = outDir + 'feature_plots_markers.png')
+    
+    
+    # Cell type annotation
+    print ('Annotating cell types ...')
+    mdata.obs['celltype'] = mdata.obs.leiden_wnn.astype("str").values
+    mdata.obs.celltype = mdata.obs.celltype.astype("category")
+    mdata.obs.celltype = mdata.obs.celltype.cat.rename_categories(new_cluster_names)
+    mdata.obs.celltype.cat.reorder_categories([set( val for dic in new_cluster_names for val in dic.values())], 
+            inplace=True)
+    cmap = plt.get_cmap('rainbow')
+    colors = cmap(np.linspace(0, 1, len(mdata.obs.celltype.cat.categories)))
+    mdata.uns["celltype_colors"] = list(map(matplotlib.colors.to_hex, colors))
+    mu.pl.umap(mdata, color="celltype", frameon=False, title="UMAP(WNN)", save = outDir + 'umap_celltypes.png')
+    
+    
+    return mdata
