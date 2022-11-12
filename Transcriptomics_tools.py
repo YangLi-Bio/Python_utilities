@@ -166,7 +166,7 @@ def Scanpy_preprocess_clustering(adata, key_genes, outDir = "./", n_top = 20, mi
   print ("Violin plots for quality control: ")
   sc.pl.violin(adata, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'],
              jitter = 0.4, multi_panel = True, save = outDir + "violin_plots.png")
-             sc.pl.scatter(adata, x='total_counts', y='pct_counts_mt')
+  sc.pl.scatter(adata, x='total_counts', y='pct_counts_mt')
   print ("Violin plots for quality control: ")
   sc.pl.scatter(adata, x = 'total_counts', y = 'n_genes_by_counts', 
                 save = outDir + "scatter_plots.png")
@@ -223,10 +223,10 @@ def Scanpy_preprocess_clustering(adata, key_genes, outDir = "./", n_top = 20, mi
   # Finding marker genes
   print ("Finding marker genes using " + method + " ...")
   if deg_method == "t-test":
-    sc.tl.rank_genes_groups(adata, 'leiden', method='t-test')
-  else deg_method == "wilcoxon":
-    sc.settings.verbosity = 2  # reduce the verbosity
-    sc.tl.rank_genes_groups(adata, 'leiden', method= deg_method)
+      sc.tl.rank_genes_groups(adata, 'leiden', method='t-test')
+  elif deg_method == "wilcoxon":
+      sc.settings.verbosity = 2  # reduce the verbosity
+      sc.tl.rank_genes_groups(adata, 'leiden', method= deg_method)
   sc.pl.rank_genes_groups(adata, n_genes=n_genes, sharey=False, save = outDir + "markers.png")
   print ("The top-5 top-ranked genes per cluster: ")
   pd.DataFrame(adata.uns['rank_genes_groups']['names']).head(5)
@@ -538,6 +538,7 @@ def vis_cellrank(adata, wk, cand_ter_states, genes_oi, time_start, time_label = 
 # Input : 
 # 1. adata : annData
 # 2. cluster_key : used to get PAGA graph
+# 3. n_genes : number of driver genes to identify
 
 
 def cellrank_pseudotime(adata, path = "./", prefix = "tmp", 
