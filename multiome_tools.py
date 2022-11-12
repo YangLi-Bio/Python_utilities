@@ -17,6 +17,9 @@ script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
 # 4. glue_reg_infer : gene regulatory inference using GLUE
 # 5. multiVI_integrate_impute : integrate RNA + ATAC and impute missing modality
 # 6. muon_tri_integrate : integrate RNA + ATAC + protein from TEA-seq using muon
+# 7. mira_modeling : integrate paired RNA + ATAC data using MIRA
+# 8. mira_joint_rep : joint representation using MIRA
+# 9. mira_topic_analysis : analyze the topics to understand the regulatory dynamics present within a sample
 
 
 
@@ -802,3 +805,255 @@ def muon_annot_celltypes(mdata, genes, new_cluster_names):
     
     
     return mdata
+
+
+
+#################################################################################
+#                                                                               #
+#          7. mira_modeling : integrate paired RNA + ATAC data using MIRA       #
+#                                                                               #
+#################################################################################
+
+
+# Tune the model
+def mira_tune(model):
+  
+  print ("Tuning the model ...")
+  model.get_learning_rate_bounds(data, eval_every=1, upper_bound_lr=5)
+  model.trim_learning_rate_bounds(2.25, 1.25)
+  _ = model.plot_learning_rate_bounds()
+  tuner = mira.topics.TopicModelTuner(
+      model,
+      save_name = 'tuning-tutorial',
+      seed = 0,
+      iters=32, # Recommend 30-64 iterations of tuning.
+      max_topics = 15 # to speed up convergence! Leave at default of 55 when working with new data.
+  )
+  tuner.train_test_split(data)
+  
+  
+  # Tuning
+  print ("Tuning the model ...")
+  tuner.tune(data, n_workers=5)
+  tuner.select_best_model(data, record_umaps=True)
+  
+  
+  return model, tuner
+
+
+
+# Input : 
+# 1. data : the annData
+
+def mira_modeling(rna_data, atac_data, min_cells = 15, outDir = "./"):
+  
+  # Import modules
+  import mira
+  import anndata
+  import scanpy as sc
+  import optuna
+  mira.utils.pretty_sderr()
+
+  
+  # Expression model preprocessing
+  print ("Expression model preprocessing ...")
+  print ("Filtering genes expressed in less than " + min_cells + " cells ...")
+  sc.pp.filter_genes(rna_data, min_cells = min_cells)
+  rna_data.raw = rna_data
+  print ("Normalizing the read depth of each cell ...")
+  sc.pp.normalize_total(rna_data, target_sum = 1e4)
+  sc.pp.log1p(rna_data)
+  print ("Calculating highly variable gene ...")
+  sc.pp.highly_variable_genes(rna_data, min_disp = 0.2)
+  rna_data.var['exog'] = rna_data.var.highly_variable.copy()
+  print ("Calculating the “endogenous” geneset ...")
+  rna_data.var['endog'] = rna_data.var.exog & (rna_data.var.dispersions_norm > 0.7)
+  rna_data.layers['counts'] = rna_data.raw.to_adata().X.copy()
+  
+  
+  # Model setup
+  print ("Setting up the RNA model ...")
+  rna_model = mira.topics.ExpressionTopicModel(
+      endogenous_key='endog',
+      exogenous_key='endog',
+      counts_layer='counts',
+      seed = 0,
+      hidden=128, # to make the tutorial faster. In practice, use the default of 128!
+  )
+  rna_model, rna_tuner = mira_tune(rna_model)
+  
+  
+  # Saving models
+  rna_model.save(outDir + 'rna_topic_model.pth')
+  print ("Saving the RNA model to " + outDir + "rna_topic_model.pth ...")
+  
+  
+  # UMAP plot for RNA
+  print ("Generating UMAP plots for RNA ...")
+  rna_model.predict(rna_data)
+  rna_model.get_umap_features(rna_data, box_cox=0.5)
+  sc.pp.neighbors(rna_data, use_rep = 'X_umap_features', metric = 'manhattan')
+  sc.tl.umap(rna_data, min_dist=0.1, negative_sample_rate=0.05)
+  sc.pl.umap(rna_data, frameon=False, size = 1200, alpha = 0.5, add_outline=True,
+            outline_width=(0.1,0), save = outDir + "rna_umap_features.png")
+  
+
+  # Accessibility model preprocessing
+  print ("Preprocessing the ATAC model ...")
+  atac_model = mira.topics.AccessibilityTopicModel(counts_layer='counts',
+                                                   dataset_loader_workers = 3)
+  atac_model, atac_tuner = mira_tune(atac_model)
+  
+  
+  # UMAP plot for ATAC
+  print ("Generating UMAP plots for ATAC ...")
+  atac_model.predict(atac_data)
+  atac_model.get_umap_features(atac_data, box_cox=0.5)
+  sc.pp.neighbors(atac_data, use_rep = 'X_umap_features', metric = 'manhattan')
+  sc.tl.umap(atac_data, min_dist=0.1, negative_sample_rate=0.05)
+  sc.pl.umap(atac_data, frameon=False, size = 1200, alpha = 0.5, add_outline=True,
+            outline_width=(0.1,0), save = outDir + "atac_umap_features.png")
+  
+  
+  # Saving ATAC model
+  atac_model.save(outDir + 'atac_topic_model.pth')
+  print ("Saving the ATAC model to " + outDir + "atac_topic_model.pth ...")
+  
+  
+  return rna_model, atac_model
+
+
+
+#################################################################################
+#                                                                               #
+#               8. mira_joint_rep : joint representation using MIRA             #
+#                                                                               #
+#################################################################################
+
+
+def mira_joint_rep(rna_data, atac_data, rna_model, atac_model, outDir = "./",
+                   umap_col = "cluster"):
+  
+  # Modules
+  import mira
+  import anndata
+  import scanpy as sc
+  import matplotlib.pyplot as plt
+  import numpy as np
+  import logging
+  import seaborn as sns
+  mira.logging.getLogger().setLevel(logging.INFO)
+  import warnings
+  warnings.simplefilter("ignore")
+  
+  umap_kwargs = dict(
+      add_outline=True, outline_width=(0.1,0), outline_color=('grey', 'white'),
+      legend_fontweight=350, frameon = False, legend_fontsize=12
+  )
+  print(mira.__version__)
+  mira.utils.pretty_sderr()
+  
+  
+  # Predicting topics
+  print ("Predicting topics ...")
+  rna_model.predict(rna_data)
+  atac_model.predict(atac_data)
+  rna_model.get_umap_features(rna_data, box_cox=0.25)
+  atac_model.get_umap_features(atac_data, box_cox=0.25)
+  rna_model.get_umap_features(rna_data, box_cox=0.25)
+  atac_model.get_umap_features(atac_data, box_cox=0.25)
+  sc.pp.neighbors(rna_data, use_rep = 'X_umap_features', metric = 'manhattan', n_neighbors = 21)
+  sc.tl.umap(rna_data, min_dist = 0.1)
+  rna_data.obsm['X_umap'] = rna_data.obsm['X_umap']*np.array([-1,-1]) # flip for consistency
+  sc.pp.neighbors(atac_data, use_rep = 'X_umap_features', metric = 'manhattan', n_neighbors = 21)
+  sc.tl.umap(atac_data, min_dist = 0.1)
+  atac_data.obsm['X_umap'] = atac_data.obsm['X_umap']*np.array([1,-1]) # flip for consistency
+  atac_data.obs = atac_data.obs.join(rna_data.obs.true_cell, how = 'left')
+  atac_data.obs.true_cell = atac_data.obs.true_cell.astype(str)
+  palette = dict(zip(
+      atac_data.obs.true_cell.unique(), [sns.color_palette('Set3')[(i+1)%12] for i in range(30)]
+  ))
+  
+  fig, ax = plt.subplots(2,1,figsize=(10,15))
+  sc.pl.umap(rna_data, color = umap_col, legend_loc = 'on data', ax = ax[0], size = 20,
+            **umap_kwargs, title = 'Expression Only', show = False, palette=palette)
+  
+  sc.pl.umap(atac_data, color = umap_col, legend_loc = 'on data', ax = ax[1], size = 20,
+            **umap_kwargs, title = 'Accessibility Only', show = False, na_color = 'lightgrey',
+            palette=palette, save = ouitDir + "umaps_cellclusters.png")
+  # plt.tight_layout()
+  # plt.show()
+  
+  
+  # Joining modalities
+  print ("Joining RNA + ATAC modalities ...")
+  rna_data, atac_data = mira.utils.make_joint_representation(rna_data, atac_data)
+  sc.pp.neighbors(rna_data, use_rep = 'X_joint_umap_features', metric = 'manhattan',
+                n_neighbors = 20)
+  sc.tl.umap(rna_data, min_dist = 0.1)
+  fig, ax = plt.subplots(1,1,figsize=(15,10))
+  sc.pl.umap(rna_data, color = umap_col, legend_loc = 'on data', ax = ax, size = 20,
+            **umap_kwargs, title = '', save = outDir + "umap_joint.png")
+  
+  
+  # Analyzing joint topic compositions
+  print ("Analyzing joint topic compositions ...")
+  mira.tl.get_cell_pointwise_mutual_information(rna_data, atac_data)
+  fig, ax = plt.subplots(1,1,figsize=(8,5))
+  sc.pl.umap(rna_data, color = 'pointwise_mutual_information', ax = ax, vmin = 0,
+            color_map='magma', frameon=False, add_outline=True, vmax = 4, size = 7, 
+            save = outDir + "topic_comp.png")
+  mira.tl.summarize_mutual_information(rna_data, atac_data)
+  cross_correlation = mira.tl.get_topic_cross_correlation(rna_data, atac_data)
+  sns.clustermap(cross_correlation, vmin = 0,
+                cmap = 'magma', method='ward',
+                dendrogram_ratio=0.05, cbar_pos=None, figsize=(7,7))
+  
+  
+  return rna_data, atac_data, cross_correlation
+
+
+
+#################################################################################
+#                                                                               #
+# 9. mira_topic_analysis : analyze the topics to understand the regulatory      #
+#    dynamics present within a sample                                           #
+#                                                                               #
+#################################################################################
+
+
+def mira_topic_analysis(rna_data, rna_model, 
+                        topic_list, ontologies, outDir = "./"):
+  
+  # Modules
+  import mira
+  import anndata
+  import scanpy as sc
+  import pandas as pd
+  import numpy as np
+  import logging
+  import warnings
+  warnings.simplefilter("ignore")
+  mira.utils.pretty_sderr()
+  
+  print ("Showing the umaps of the first several topics in RNA ...")
+  sc.pl.umap(rna_data, color  = topic_list, frameon=False, ncols=2,
+          color_map = 'magma', save = outDir + "umap_topics.png")
+  
+  
+  # Expression Topic Analysis
+  print ("Showing top-ranked genes in each topic ...")
+  for i in topic_list:
+    rna_model.get_top_genes(i, top_n=2)
+    sc.pl.umap(rna_data, color = rna_model.get_top_genes(i, top_n=2), **mira.pref.raw_umap(ncols=3, size=15), 
+               save = outDir + "top_genes_topic_" + i + ".png")
+    rna_model.post_topic(i, top_n=400)
+    rna_model.rank_genes(i)
+    rna_model.fetch_topic_enrichments(i, ontologies = ontologies)
+    rna_model.plot_enrichments(i, show_top=5)
+    pd.DataFrame(
+        rna_model.get_enrichments(i)[ontologies]
+    ).head(3)
+
+
+  return rna_model
