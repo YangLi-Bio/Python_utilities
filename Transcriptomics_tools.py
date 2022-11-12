@@ -661,7 +661,8 @@ def cellrank_pseudotime(adata, path = "./", prefix = "tmp",
 
 
 def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster', 
-                     markerField = 'rank_genes_groups'):
+                     padj_cutoff = 0.05, nQuickGenes = 5,
+                     key_added = 'rank_genes_groups', method = "t-test"):
   
   # Import modules
   print ("Importing modules ...\n")
@@ -682,9 +683,42 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   print(adata)
   
   
+  # Get markers 
+  if deg_attr not in adata.uns_keys():
+    print ("Performing DEG analysis and save results in " + deg_attr + " ...")
+    sc.tl.rank_genes_groups(adata, clusterField, method = method, key_added = key_added)
+  marker_df = sc.get.rank_genes_groups_df(adata, key = key_added', 
+                                        group = epcamY4.obs[clusterField].unique().astype(str))
+  print ("Writing marker genes to " + cb_outdir + "/marker_pri.tsv ...")
+  marker_df.to_csv(cb_outdir + '/markers_pri.tsv', sep = '\t', index = False)
+  
+  
+  # Get quickGenes
+  print ("Filtering and sorting DEGs according to p-values and logFoldChange ...")
+  marker_df.filter(marker_df.pvals_adj < padj_cutoff)
+  marker_df.sort_values(by = ['logfoldchanges'], ascending = False)
+  quickGenes = marker_df.groupby('group').head(nQuickGenes)
+  quickGenes_df = quickGenes[['names', 'group']]
+  print ("Writing quickGenes to " + cb_outdir + "/quickGenes_pri.")
+  quickGenes_df.to_csv(cb_outdir + '/quickGenes_pri.tsv', sep = '\t', 
+                       index = False, header = False)
+  
+  
   # Export data
-  cb.scanpyToCellbrowser(adata, cb_outdir, name, clusterField, markerField)
-
+  print ("Exporting annData to Cell Browser ...")
+  sc.external.exporting.cellbrowser(adata, cb_outdir, name, annot_keys = None)
+  
+  
+  # Post processing
+  print ("Changing to directory " + cb_outdir + " ...")
+  os.chdir(cb_outdir)
+  print ("Annotating marker genes via system command ...")
+  os.system("cbMarkerAnnotate marker_pri.tsv marker.tsv")
+  os.system("mv quickGenes_pri.tsv quickGenes.tsv")
+  print ("Please remember revise the cellbrowser.conf document manually.")
+  
+  
+  return adata
 
 
 #################################################################################
