@@ -19,7 +19,7 @@
 # 11. pyscenic_grn : infer gene regulatory networks using pySCENIC
 
 
-script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions"
+script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions/"
 
 
 
@@ -661,8 +661,10 @@ def cellrank_pseudotime(adata, path = "./", prefix = "tmp",
 
 
 def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster', 
-                     padj_cutoff = 0.05, nQuickGenes = 5,
-                     key_added = 'rank_genes_groups', method = "t-test"):
+                     padj_cutoff = 0.05, nQuickGenes = 5, name = "single_cell", 
+                     enumFields = ["chosen_cluster", "sub_cluster"], 
+                     coord_methods = ["pca", "umap", "diffmap"], 
+                     ifMarker = True, key_added = "rank_genes_groups", method = "t-test"):
   
   # Import modules
   print ("Importing modules ...\n")
@@ -678,17 +680,23 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   from datetime import datetime
   
   
+  # Check directory
+  if not os.path.exists(cb_outdir):
+    print ("Creating directory: " + cb_outdir + " ...")
+    os.mkdir(cb_outdir)
+  
+  
   # Data description
   print("Loading annData object: \n")
   print(adata)
   
   
   # Get markers 
-  if deg_attr not in adata.uns_keys():
-    print ("Performing DEG analysis and save results in " + deg_attr + " ...")
+  if ifMarker:
+    print ("Performing DEG analysis and save results in " + key_added + " ...")
     sc.tl.rank_genes_groups(adata, clusterField, method = method, key_added = key_added)
-  marker_df = sc.get.rank_genes_groups_df(adata, key = key_added', 
-                                        group = epcamY4.obs[clusterField].unique().astype(str))
+  marker_df = sc.get.rank_genes_groups_df(adata, key = key_added, 
+                                        group = adata.obs[clusterField].unique().astype(str))
   print ("Writing marker genes to " + cb_outdir + "/marker_pri.tsv ...")
   marker_df.to_csv(cb_outdir + '/markers_pri.tsv', sep = '\t', index = False)
   
@@ -709,13 +717,56 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   sc.external.exporting.cellbrowser(adata, cb_outdir, name, annot_keys = None)
   
   
-  # Post processing
+  # Change to the subdirectory
   print ("Changing to directory " + cb_outdir + " ...")
   os.chdir(cb_outdir)
+  
+  
+  # Generate marker gene list
   print ("Annotating marker genes via system command ...")
-  os.system("cbMarkerAnnotate marker_pri.tsv marker.tsv")
+  os.system("cbMarkerAnnotate markers_pri.tsv markers.tsv")
+  os.system("rm markers_pri.tsv")
+  
+  
+  # Generate quick marker gene list
+  print ("Generating the quick gene list ...")
   os.system("mv quickGenes_pri.tsv quickGenes.tsv")
-  print ("Please remember revise the cellbrowser.conf document manually.")
+  os.system("rm quickGenes_pri.tsv")
+#  print ("Please remember revise the cellbrowser.conf document manually.")
+
+
+  # Generate the cellbrowser.conf file
+  with open("cellbrowser.conf", "w") as f:
+    f.write("name='" + name + "'")
+    f.write("shortLabel='" + name + "'")
+    f.write("exprMatrix='exprMatrix.tsv.gz'")
+    f.write("meta='meta.tsv'")
+    f.write("geneIdType='auto'")
+    f.write("defColorField='" + clusterField + "'")
+    f.write("labelField='" + clusterField + "'")
+#    enumStr = ', '.join(enumFields)
+    f.write("enumFields='" + join(enumFields, "', '") + "'")
+    f.write("coords=[")
+    
+    for dim in coord_methods[:-1]:
+      f.write("\t{")
+      f.write("\t\t'file'\: '" + method + "_coords.tsv',")
+      f.write("\t\t'shortLabel'\: '" + method + "'")
+      f.write("},")
+    
+    f.write("\t{")
+    f.write("\t\t'file'\: '" + method + "_coords.tsv',")
+    f.write("\t\t'shortLabel'\: '" + method + "'")
+    f.write("}")
+    
+    f.write("]")
+    f.write("markers = [{'file'\: 'markers.tsv', 'shortLabel'\:'Cluster Markers'}]")
+    f.write("quickGenesFile='quickGenes.tsv'")
+  
+  
+  # Change tyo the parental directory
+  print ("Changing to the parental directory ...")
+  os.chdir ("..")
   
   
   return adata
