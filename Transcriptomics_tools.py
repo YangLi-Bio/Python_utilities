@@ -661,6 +661,7 @@ def cellrank_pseudotime(adata, path = "./", prefix = "tmp",
 
 
 def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster', 
+                     logfc_cutoff = 0.0, 
                      padj_cutoff = 0.05, nQuickGenes = 5, name = "single_cell", 
                      enumFields = ["chosen_cluster", "sub_cluster"], 
                      coord_methods = ["pca", "umap", "diffmap"], 
@@ -704,6 +705,7 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   # Get quickGenes
   print ("Filtering and sorting DEGs according to p-values and logFoldChange ...")
   marker_df.filter(marker_df.pvals_adj < padj_cutoff)
+  marker_df.filter(marker_df.logfoldchanges > logfc_cutoff)
   marker_df.sort_values(by = ['logfoldchanges'], ascending = False)
   quickGenes = marker_df.groupby('group').head(nQuickGenes)
   quickGenes_df = quickGenes[['names', 'group']]
