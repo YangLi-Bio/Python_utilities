@@ -702,16 +702,19 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   marker_df.to_csv(cb_outdir + '/markers_pri.tsv', sep = '\t', index = False)
   
   
-  # Get quickGenes
-  print ("Filtering and sorting DEGs according to p-values and logFoldChange ...")
-  marker_df.filter(marker_df.pvals_adj < padj_cutoff)
-  marker_df.filter(marker_df.logfoldchanges > logfc_cutoff)
-  marker_df.sort_values(by = ['logfoldchanges'], ascending = False)
-  quickGenes = marker_df.groupby('group').head(nQuickGenes)
-  quickGenes_df = quickGenes[['names', 'group']]
-  print ("Writing quickGenes to " + cb_outdir + "/quickGenes_pri.")
-  quickGenes_df.to_csv(cb_outdir + '/quickGenes_pri.tsv', sep = '\t', 
-                       index = False, header = False)
+  # # Get quickGenes
+  # print ("Filtering and sorting DEGs according to p-values and logFoldChange ...")
+  # marker_df.filter(marker_df.pvals_adj < padj_cutoff)
+  # marker_df.filter(marker_df.logfoldchanges > logfc_cutoff)
+  # marker_df.sort_values(by = ['logfoldchanges'], ascending = False)
+  # quickGenes = marker_df.groupby('group').head(nQuickGenes)
+  # quickGenes_df = quickGenes[['names', 'group']]
+  # print ("Writing quickGenes to " + cb_outdir + "/quickGenes_pri.")
+  # quickGenes_df.to_csv(cb_outdir + '/quickGenes_pri.tsv', sep = '\t', 
+  #                      index = False, header = False)
+  sc.pl.rank_genes_groups_heatmap(adata, n_genes = nQuickGenes, groupby = clusterField, 
+                                  figsize = [10, 15],
+                                  show_gene_labels = True, save = cb_outdir + prefix + "_heatmap.png")
   
   
   # Export data
