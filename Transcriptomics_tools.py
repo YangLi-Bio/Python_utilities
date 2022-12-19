@@ -660,7 +660,7 @@ def cellrank_pseudotime(adata, path = "./", prefix = "tmp",
 #################################################################################
 
 
-def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster', 
+def scanpy_export_CB(adata, cb_outdir, clusterField = 'chosen_cluster', 
                      logfc_cutoff = 0.0, 
                      padj_cutoff = 0.05, nQuickGenes = 5, name = "single_cell", 
                      enumFields = ["chosen_cluster", "sub_cluster"], 
@@ -714,7 +714,7 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
   #                      index = False, header = False)
   sc.pl.rank_genes_groups_heatmap(adata, n_genes = nQuickGenes, groupby = clusterField, 
                                   figsize = [10, 15],
-                                  show_gene_labels = True, save = cb_outdir + prefix + "_heatmap.png")
+                                  show_gene_labels = True, save = "_" + prefix + ".png")
   
   
   # Export data
@@ -742,34 +742,34 @@ def scanpy_export_CB(adata, cb_outdir, name, clusterField = 'chosen_cluster',
 
   # Generate the cellbrowser.conf file
   with open("cellbrowser.conf", "w") as f:
-    f.write("name='" + name + "'")
-    f.write("shortLabel='" + name + "'")
-    f.write("exprMatrix='exprMatrix.tsv.gz'")
-    f.write("meta='meta.tsv'")
-    f.write("geneIdType='auto'")
-    f.write("defColorField='" + clusterField + "'")
-    f.write("labelField='" + clusterField + "'")
+    f.write("name='" + name + "'\n")
+    f.write("shortLabel='" + name + "'\n")
+    f.write("exprMatrix='exprMatrix.tsv.gz'\n")
+    f.write("meta='meta.tsv'\n")
+    f.write("geneIdType='auto'\n")
+    f.write("defColorField='" + clusterField + "'\n")
+    f.write("labelField='" + clusterField + "'\n")
 #    enumStr = ', '.join(enumFields)
-    f.write("enumFields='" + join(enumFields, "', '") + "'")
-    f.write("coords=[")
+    f.write("enumFields='" + "', '".join(enumFields) + "'\n")
+    f.write("coords=[\n")
     
     for dim in coord_methods[:-1]:
-      f.write("\t{")
-      f.write("\t\t'file'\: '" + method + "_coords.tsv',")
-      f.write("\t\t'shortLabel'\: '" + method + "'")
-      f.write("},")
+      f.write("\t{\n")
+      f.write("\t\t'file': '" + dim + "_coords.tsv',\n")
+      f.write("\t\t'shortLabel': '" + dim + "'\n")
+      f.write("\t},\n")
     
-    f.write("\t{")
-    f.write("\t\t'file'\: '" + method + "_coords.tsv',")
-    f.write("\t\t'shortLabel'\: '" + method + "'")
-    f.write("}")
+    f.write("\t{\n")
+    f.write("\t\t'file': '" + dim + "_coords.tsv',\n")
+    f.write("\t\t'shortLabel': '" + dim + "'\n")
+    f.write("\t}\n")
     
-    f.write("]")
-    f.write("markers = [{'file'\: 'markers.tsv', 'shortLabel'\:'Cluster Markers'}]")
-    f.write("quickGenesFile='quickGenes.tsv'")
+    f.write("]\n")
+    f.write("markers = [{'file': 'markers.tsv', 'shortLabel':'Cluster Markers'}]\n")
+    f.write("quickGenesFile='quickGenes.tsv'\n")
   
   
-  # Change tyo the parental directory
+  # Change to the parental directory
   print ("Changing to the parental directory ...")
   os.chdir ("..")
   
