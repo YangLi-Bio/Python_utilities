@@ -17,6 +17,7 @@
 # 9. scanpy_trajectory : trajectory analysis using Scanpy
 # 10. scanpy_pt : pseudotime analysis using Scanpy
 # 11. pyscenic_grn : infer gene regulatory networks using pySCENIC
+# 12. merge_paga : merge the paga graphs of two annData
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions/"
@@ -1051,3 +1052,142 @@ def pyscenic_grn(DATA_FOLDER, RESOURCES_FOLDER, DATABASE_FOLDER, SCHEDULER,
     print ('Measuring the enrichment of regulons via Area Under the recovery Curve (AUC) ...')
     auc_mtx = aucell(ex_matrix, regulons, num_workers=4)
     sns.clustermap(auc_mtx, figsize=(8,8))
+
+
+
+#################################################################################
+#                                                                               #
+#           12. merge_paga : merge the paga graphs of two annData               #
+#                                                                               #
+#################################################################################
+
+
+# Input : 
+# 1. obs1 : the obs label to generate PAGA plot for the first annData
+# 2. obs2 : the obs label to generate PAGA plot for the second annData
+# 3. key1 : the key to save the matrix of PAGA graph for the first annData
+# 4. key2 : the key to save the matrix of PAGA graph for the second annData
+# 5. thr : threshold of the edge weighs in PAGA graph
+
+
+def merge_paga(adata1, adata2, obs1 = "cluster1", obs2 = "cluster2",
+               key1 = "connectivities", key2 = "connectivities", 
+               thr = 0.75, node_size_scale= 0.2, edge_width_scale = 0.1, 
+               prefix = "tmp"):
+  
+  
+  # Modules
+  import sys
+  import os
+  import numpy as np
+  import matplotlib
+  import matplotlib.pyplot as plt
+
+  import anndata as ad
+  import scanpy as sc
+  import pandas as pd
+
+  from scipy.sparse import csr_matrix
+  import re
+
+  
+  # Parameters
+  print ("Basic information of the two annData objects:\n")
+  adata1
+  print ("\n\n")
+  adata2
+  
+  
+  # Dependencies
+  cwd = os.getcwd()
+  os.chdir(script_dir)
+  from Utilities import union
+  from Utilities import get_indices
+  os.chdir(cwd)
+  
+  
+  # Get the union of node lists of two annData
+  nodes = union(adata1.obs[obs1].cat.categories.tolist(), 
+                adata2.obs[obs2].cat.categories.tolist())
+  print ("Obtained the union of union lists of the two annData objects, which contains " + 
+         len(nodes) + " nodes.\n")
+  
+  
+  # # Extract the triplets from sparse matrices of the two annData objects
+  # print ("Extracting the coordinates of nonzero elements in the matrices ...\n")
+  # coord1 = adata1.uns['paga'][key1].nonzero()
+  # coord1_x = coord1[0].tolist()
+  # coord1_y = coord1[1].tolist()
+  # 
+  # coord2 = adata2.uns['paga'][key2].nonzero()
+  # coord2_x = coord2[0].tolist()
+  # coord2_y = coord2[1].tolist()
+  
+  
+  # Convert indices of parse matrices of the two annData objects into strings
+  print ("Converting the indices of sparse matrices of PAGA graphs of the two annData objects into strings ...\n")
+  str1_x = []
+  for x in coord1[0].tolist():
+      str1_x.append(adata1.obs[obs1].cat.categories.tolist()[x])
+  
+  str2_x = []
+  for x in coord2[0].tolist():
+      str2_x.append(adata2.obs[obs2].cat.categories.tolist()[x])
+
+  str1_y = []
+  for x in coord1[1].tolist():
+      str1_y.append(adata1.obs[obs1].cat.categories.tolist()[x])
+
+  str2_y = []
+  for x in coord2[1].tolist():
+      str2_y.append(adata2.obs[obs2].cat.categories.tolist()[x])
+
+  str1_e = []
+  for i in range(0, len(coord1[0].tolist())):
+      str1_e.append(adata1.uns["paga"][key1][coord1[0].tolist()[i], coord1[1].tolist()[i]])
+
+  str2_e = []
+  for i in range(0, len(coord2[0].tolist())):
+      str2_e.append(adata2.uns["paga"][key2][coord2[0].tolist()[i], coord2[1].tolist()[i]])
+  
+  
+  # Extract indices from strings representing nodes
+  print ("Extracting the indices of node strings in node list ...\n")
+  str_x = union(str1_x, str2_x)
+  str_y = union(str1_y, str2_y)
+  ele = union(str1_e, str2_e)
+  
+  x_ind = get_indices(nodes, str_x)
+  y_ind = get_indices(nodes, str_y)
+
+
+  # Build sparse matrix of the union PAGA graphs
+  print ("Building connectivities matrix for the union PAGA graph ...\n")
+  connectivities = csr_matrix((ele, (x_ind, y_ind)), 
+                              shape = (max([max(x_ind) + 1, max(y_ind) + 1])))
+  
+
+  # Concatenate two annData objects
+  adata = ad.concat([adata1, adata2], join = "outer")
+  print ("Basic information of the concatenated annData object: \n")
+  adata
+  
+  
+  # Generate PAGA graph after concatenation
+  sc.tl.paga(adata, groups = obs1)
+  adata.uns["paga"][key1] = sp.csr_matrix(connectivities)
+
+
+  # Generate PAGA graphs
+  print ("Generating PAGA graphs for the merged annData object under various layouts ...\n")
+  # if not os.path.exists(out_dir):
+  #   os.mkdirs(out_dir)
+  #   print ("Created the directory: " + out_dir + " to save the images of PAGA graphs.\n")
+  layout_lst = ["fa", "fr", "rt", "rt_circular", "drl", "eq_tree"]
+  for x in layout_lst:
+    sc.pl.paga(adata, color= obs1, solid_edges = key1, layout = x, threshold = thr,
+           node_size_scale = node_size_scale, edge_width_scale = edge_width_scale, 
+           save = prefix + "_paga_graph_" + layout + ".png")
+  
+  
+  return adata
