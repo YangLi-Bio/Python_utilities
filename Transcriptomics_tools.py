@@ -18,6 +18,7 @@
 # 10. scanpy_pt : pseudotime analysis using Scanpy
 # 11. pyscenic_grn : infer gene regulatory networks using pySCENIC
 # 12. merge_paga : merge the paga graphs of two annData
+# 13. add_edges_to_paga : add edges to the PAGA graph of an annData object
 
 
 script_dir = "/fs/ess/PCON0022/liyang/Python_utilities/Functions/"
@@ -1125,7 +1126,7 @@ def merge_paga(adata1, adata2, obs1 = "cluster1", obs2 = "cluster2",
   
   
   # Convert indices of parse matrices of the two annData objects into strings
-  print ("Converting the indices of sparse matrices of PAGA graphs of the two annData objects into strings ...\n")
+  print ("Converting the indices of the matrices of PAGA graphs into strings ...\n")
   str1_x = []
   for x in coord1[0].tolist():
       str1_x.append(adata1.obs[obs1].cat.categories.tolist()[x])
@@ -1191,3 +1192,64 @@ def merge_paga(adata1, adata2, obs1 = "cluster1", obs2 = "cluster2",
   
   
   return adata
+
+
+
+#################################################################################
+#                                                                               #
+#   13. add_edges_to_paga : add edges to the PAGA graph of an annData object    #
+#                                                                               #
+#################################################################################
+
+
+# Input :
+# 1. adata : the annData object of which the PAGA graph has been calculated
+# 2. edges : additional edges to add
+
+
+def add_edges_to_paga(adata, edges, weights, obs = "cluster", net_key = "connectivities"):
+  
+  # Modules
+  import sys
+  import os
+  import numpy as np
+  import matplotlib
+  import matplotlib.pyplot as plt
+
+  import anndata as ad
+  import scanpy as sc
+  import pandas as pd
+
+  from scipy.sparse import csr_matrix
+  import re
+
+  
+  # Parameters
+  print ("Basic information of the annData object: \n")
+  adata
+  print ("\nEdgfes to be added: \n")
+  edges
+  
+  
+  # Dependencies
+  cwd = os.getcwd()
+  os.chdir(script_dir)
+  from Utilities import get_indices
+  os.chdir(cwd)
+  
+  
+  # Convert edges (string) into pairs of nodes (indices)
+  print ("Converting node names into integer indices ...\n")
+  inds = get_indices(adata.obs[obs].cat.categories.tolist(), 
+                      edges)
+
+  
+  # Modify the connectivities matrix
+  conn_m = adata["paga"][net_key]
+  for i in range(0, len(weights)):
+    conn_m[2 * i, 2 * i + 1] = weights[i]
+  adata["paga"][net_key] = conn_m
+  print ("Added " + len(weights) + " edges to the PAGA graph.\n")
+  
+  
+  return(adata)
