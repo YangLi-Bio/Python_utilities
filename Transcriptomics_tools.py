@@ -667,7 +667,8 @@ def scanpy_export_CB(adata, cb_outdir, clusterField = 'chosen_cluster',
                      padj_cutoff = 0.05, nQuickGenes = 5, name = "single_cell", 
                      enumFields = ["chosen_cluster", "sub_cluster"], 
                      coord_methods = ["pca", "umap", "diffmap"], 
-                     ifMarker = True, key_added = "rank_genes_groups", method = "t-test"):
+                     ifMarker = True, key_added = "rank_genes_groups", method = "t-test",
+                     noGene = False, noAnnotation = True):
   
   # Import modules
   print ("Importing modules ...\n")
@@ -700,6 +701,11 @@ def scanpy_export_CB(adata, cb_outdir, clusterField = 'chosen_cluster',
     sc.tl.rank_genes_groups(adata, clusterField, method = method, key_added = key_added)
   marker_df = sc.get.rank_genes_groups_df(adata, key = key_added, 
                                         group = adata.obs[clusterField].unique().astype(str))
+  if not noGene:
+    print ("Filtering out the features without a gene symbol ...")
+    regex = "(?!A[L|C][0-9]+)"
+    marker_df = marker_df[marker_df["names"].str.match(regex)]
+    print ("Obtained " + str(len(marker_df)) + " marker genes after filteration.\n")
   print ("Writing marker genes to " + cb_outdir + "/marker_pri.tsv ...")
   marker_df.to_csv(cb_outdir + '/markers_pri.tsv', sep = '\t', index = False)
   
@@ -731,14 +737,21 @@ def scanpy_export_CB(adata, cb_outdir, clusterField = 'chosen_cluster',
   
   # Generate marker gene list
   print ("Annotating marker genes via system command ...")
-  os.system("cbMarkerAnnotate markers_pri.tsv markers.tsv")
-  os.system("rm markers_pri.tsv")
+  os.system("cbMarkerAnnotate markers_pri.tsv markers_putative.tsv")
+  if not noAnnotation:
+    tsv_markers = pd.read_table("markers_putative.tsv")
+    tsv_markers = tsv_markers[~tsv_markers["_expr"].isnull()]
+    tsv_markers.to_csv("markers.tsv", sep = "\t")
+    os.system("rm markers_pri.tsv")
+    os.system("rm markers_putative.tsv")
+  else:
+    os.system("mv markers_putative.tsv markers.tsv")
   
   
   # Generate quick marker gene list
-  print ("Generating the quick gene list ...")
-  os.system("mv quickGenes_pri.tsv quickGenes.tsv")
-  os.system("rm quickGenes_pri.tsv")
+#  print ("Generating the quick gene list ...")
+#  os.system("mv quickGenes_pri.tsv quickGenes.tsv")
+#  os.system("rm quickGenes_pri.tsv")
 #  print ("Please remember revise the cellbrowser.conf document manually.")
 
 
@@ -762,8 +775,8 @@ def scanpy_export_CB(adata, cb_outdir, clusterField = 'chosen_cluster',
       f.write("\t},\n")
     
     f.write("\t{\n")
-    f.write("\t\t'file': '" + dim + "_coords.tsv',\n")
-    f.write("\t\t'shortLabel': '" + dim + "'\n")
+    f.write("\t\t'file': '" + coord_methods[-1] + "_coords.tsv',\n")
+    f.write("\t\t'shortLabel': '" + coord_methods[-1] + "'\n")
     f.write("\t}\n")
     
     f.write("]\n")
